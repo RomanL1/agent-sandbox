@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+# Agentic dev sandbox. Podman-first, Docker-compatible.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IMAGE="${SANDBOX_IMAGE:-agent-sandbox:dev}"
+NAME="${SANDBOX_NAME:-agent-sandbox}"
+HOME_VOL="${SANDBOX_HOME_VOLUME:-agent-sandbox-home}"
+WORKSPACE="${SANDBOX_WORKSPACE:-$ROOT/workspace}"
+NET="${SANDBOX_NET:-bridge}"
+PORTS="${SANDBOX_PORTS:-}"          # e.g. "8080:8080" (rootless: host port > 1024)
+MEMORY="${SANDBOX_MEMORY:-8g}"
+HOST_HOME="${SANDBOX_HOST_HOME:-$HOME}"
+
+# The macOS Podman package installs the CLI outside the default PATH.
+if ! command -v podman >/dev/null 2>&1 && [ -x /opt/podman/bin/podman ]; then
+  PATH="/opt/podman/bin:$PATH"
+fi
+
+ENGINE="${SANDBOX_ENGINE:-}"
+if [ -z "$ENGINE" ]; then
+  if command -v podman >/dev/null 2>&1; then ENGINE=podman
+  elif command -v docker >/dev/null 2>&1; then ENGINE=docker
+  else echo "sandbox: neither podman nor docker on PATH" >&2; exit 1; fi
+fi
+
+# Host config dirs each agent keeps its credentials and settings in.
+CRED_PATHS=(
+  ".claude" ".claude.json"
+  ".codex"
+  ".config/opencode" ".local/share/opencode"
+  ".copilot"
+  ".antigravity" ".antigravitycli" ".gemini"
+  ".config/gh"
+)
+
+# Map the host user onto container uid 1000 so files written to the workspace
+# are owned by you rather than root.
+if [ "$ENGINE" = podman ]; then
+  ID_FLAGS=(--userns=keep-id:uid=1000,gid=1000)
+else
+  ID_FLAGS=(--user 1000:1000)
+fi
+
+# :z relabels for SELinux (the podman machine enforces it); docker ignores it.
+MOUNT_FLAGS=(
+  -v "$WORKSPACE:/workspace:z"
+  -v "$HOME_VOL:/home/dev"          # persistent: agent logins survive --rm
+)
+
+PORT_FLAGS=()
+for p in $PORTS; do PORT_FLAGS+=(-p "$p"); done
+
+# Forward whichever API keys are set in the calling shell; never bake them in.
+ENV_FLAGS=()
+for v in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL \
+         OPENAI_API_KEY OPENAI_BASE_URL \
+         GITHUB_TOKEN GH_TOKEN \
+         OPENCODE_API_KEY GEMINI_API_KEY \
+         HTTP_PROXY HTTPS_PROXY NO_PROXY SANDBOX_NO_BYPASS; do
+  [ -n "${!v:-}" ] && ENV_FLAGS+=(-e "$v=${!v}")
+done
+# Git identity, so agent-authored commits are attributed correctly.
+gn="$(git config --global user.name 2>/dev/null || true)"
+ge="$(git config --global user.email 2>/dev/null || true)"
+[ -n "$gn" ] && ENV_FLAGS+=(-e "GIT_AUTHOR_NAME=$gn" -e "GIT_COMMITTER_NAME=$gn")
+[ -n "$ge" ] && ENV_FLAGS+=(-e "GIT_AUTHOR_EMAIL=$ge" -e "GIT_COMMITTER_EMAIL=$ge")
+
+# Unprivileged, no privilege escalation, immutable root filesystem. The agents
+# get a writable /workspace, a writable persistent /home/dev, and /tmp.
+HARDEN_FLAGS=(
+  --security-opt no-new-privileges
+  --cap-drop=ALL
+  --read-only
+  --tmpfs /tmp:rw,nosuid,nodev,size=2g,mode=1777
+  --pids-limit 2048
+  --memory "$MEMORY"
+)
+
+RUN_FLAGS=(--network "$NET" "${ID_FLAGS[@]}" "${MOUNT_FLAGS[@]}"
+           ${ENV_FLAGS[@]+"${ENV_FLAGS[@]}"} "${HARDEN_FLAGS[@]}")
+
+usage() {
+  cat <<'USAGE'
+usage: ./sandbox <command> [args]
+
+  build [args...]         build the image (extra args go to the engine)
+  shell                   interactive shell (ephemeral container, persistent home)
+  claude|codex|opencode|copilot|agy [args...]
+                          run that agent with its permission bypass enabled
+                          (SANDBOX_NO_BYPASS=1 restores the prompts)
+  run <cmd...>            run one command in an ephemeral container
+  up | exec <cmd...> | down | ps
+                          long-lived named container lifecycle
+  import-creds [name...]  copy host agent logins into the sandbox home volume
+  reset-home              delete the home volume (drops all sandbox logins)
+  info                    engine, rootless status, resolved settings
+
+env: SANDBOX_ENGINE SANDBOX_IMAGE SANDBOX_NAME SANDBOX_WORKSPACE
+     SANDBOX_HOME_VOLUME SANDBOX_NET SANDBOX_PORTS SANDBOX_MEMORY
+USAGE
+}
+
+ensure_home_vol() {
+  "$ENGINE" volume inspect "$HOME_VOL" >/dev/null 2>&1 || "$ENGINE" volume create "$HOME_VOL" >/dev/null
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  build)
+    "$ENGINE" build -f "$ROOT/Containerfile" -t "$IMAGE" "$@" "$ROOT"
+    ;;
+
+  shell)
+    ensure_home_vol
+    exec "$ENGINE" run --rm -it "${RUN_FLAGS[@]}" ${PORT_FLAGS[@]+"${PORT_FLAGS[@]}"} "$IMAGE" bash -l
+    ;;
+
+  claude|codex|opencode|copilot|agy)
+    ensure_home_vol
+    # The container is the security boundary, so the agents' own permission
+    # prompts add friction without adding protection. Each is launched with its
+    # bypass flag; set SANDBOX_NO_BYPASS=1 to get the interactive prompts back.
+    BYPASS=()
+    if [ -z "${SANDBOX_NO_BYPASS:-}" ]; then
+      case "$cmd" in
+        claude|agy) BYPASS=(--dangerously-skip-permissions) ;;
+        codex)      BYPASS=(--dangerously-bypass-approvals-and-sandbox) ;;
+        copilot)    BYPASS=(--allow-all) ;;
+        # opencode only accepts --auto on `run`; its TUI has no bypass flag.
+        opencode)   [ "${1:-}" = run ] && BYPASS=(--auto) ;;
+      esac
+      # Don't double up if the caller already passed the flag.
+      for a in "$@"; do
+        [ "$a" = "${BYPASS[0]:-}" ] && BYPASS=() && break
+      done
+    fi
+    if [ "$cmd" = opencode ] && [ "${1:-}" = run ] && [ ${#BYPASS[@]} -gt 0 ]; then
+      shift
+      exec "$ENGINE" run --rm -it "${RUN_FLAGS[@]}" ${PORT_FLAGS[@]+"${PORT_FLAGS[@]}"} \
+        "$IMAGE" opencode run "${BYPASS[@]}" "$@"
+    fi
+    exec "$ENGINE" run --rm -it "${RUN_FLAGS[@]}" ${PORT_FLAGS[@]+"${PORT_FLAGS[@]}"} \
+      "$IMAGE" "$cmd" ${BYPASS[@]+"${BYPASS[@]}"} "$@"
+    ;;
+
+  run)
+    [ $# -gt 0 ] || { echo "sandbox: run needs a command" >&2; exit 2; }
+    ensure_home_vol
+    exec "$ENGINE" run --rm -i "${RUN_FLAGS[@]}" "$IMAGE" "$@"
+    ;;
+
+  up)
+    ensure_home_vol
+    "$ENGINE" run -d --name "$NAME" "${RUN_FLAGS[@]}" ${PORT_FLAGS[@]+"${PORT_FLAGS[@]}"} \
+      "$IMAGE" sleep infinity
+    ;;
+
+  exec)
+    [ $# -gt 0 ] || { echo "sandbox: exec needs a command" >&2; exit 2; }
+    exec "$ENGINE" exec -it "$NAME" "$@"
+    ;;
+
+  down) "$ENGINE" rm -f "$NAME" ;;
+  ps)   "$ENGINE" ps -a --filter "name=$NAME" ;;
+
+  import-creds)
+    ensure_home_vol
+    wanted=("$@")
+    echo "Copying host agent credentials into volume '$HOME_VOL'."
+    echo "The sandbox will then hold live logins for those agents. Ctrl-C to abort."
+    for rel in "${CRED_PATHS[@]}"; do
+      base="$(basename "$rel")"
+      if [ ${#wanted[@]} -gt 0 ]; then
+        match=0
+        for w in "${wanted[@]}"; do [[ "$rel" == *"$w"* ]] && match=1; done
+        [ $match -eq 1 ] || continue
+      fi
+      src="$HOST_HOME/$rel"
+      [ -e "$src" ] || continue
+      dir="$(dirname "/home/dev/$rel")"
+      "$ENGINE" run --rm "${ID_FLAGS[@]}" \
+        -v "$HOME_VOL:/home/dev" \
+        -v "$src:/src/$base:ro,z" \
+        "$IMAGE" bash -lc "mkdir -p '$dir' && cp -a '/src/$base' '$dir/'" \
+        && echo "  imported $rel"
+    done
+    ;;
+
+  reset-home)
+    printf "Delete volume '%s' and every sandbox login in it? [y/N] " "$HOME_VOL"
+    read -r ans
+    [ "$ans" = y ] || { echo "aborted"; exit 1; }
+    "$ENGINE" volume rm -f "$HOME_VOL"
+    ;;
+
+  info)
+    echo "engine:    $ENGINE ($("$ENGINE" --version))"
+    if [ "$ENGINE" = podman ]; then
+      echo "rootless:  $(podman info --format '{{.Host.Security.Rootless}}')"
+      echo "machine:   $(podman machine list --format '{{.Name}} {{.LastUp}}' 2>/dev/null | head -1)"
+    fi
+    echo "image:     $IMAGE"
+    echo "workspace: $WORKSPACE -> /workspace"
+    echo "home vol:  $HOME_VOL -> /home/dev"
+    echo "network:   $NET   ports: ${PORTS:-<none>}   memory: $MEMORY"
+    echo "env fwd:   ${ENV_FLAGS[*]:-<none>}" | sed -E 's/=[^ ]+/=***/g'
+    ;;
+
+  ""|-h|--help|help) usage ;;
+  *) echo "sandbox: unknown command '$cmd'" >&2; usage >&2; exit 2 ;;
+esac

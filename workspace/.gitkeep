@@ -1,0 +1,1 @@
+sandbox workspace; bind-mounted read-write into /workspace
