@@ -34,6 +34,33 @@ A flag you pass yourself is not duplicated (codex rejects the repeat).
 
 Put code in `workspace/` — it is bind-mounted read-write at `/workspace`.
 
+## Running an agent inside one project
+
+Agents start in `/workspace` by default. To start in a project instead:
+
+```sh
+cd workspace/myapp && ../../sandbox claude   # cwd inside workspace/ is detected
+SANDBOX_PROJECT=myapp ./sandbox claude       # or name it from anywhere
+```
+
+Both put the agent in `/workspace/myapp`. Nested directories work too, so
+running from `workspace/myapp/src` starts the agent there.
+
+The agent can still *see* sibling projects, since the whole `workspace/` is
+mounted. To hand it one project and nothing else, mount only that project — it
+lands at `/workspace` and neighbours do not exist inside the container:
+
+```sh
+SANDBOX_WORKSPACE=~/code/myapp ./sandbox claude
+```
+
+That form also works for a project living outside `workspace/`. Pair it with a
+per-project home volume to keep sessions and logins separate:
+
+```sh
+SANDBOX_WORKSPACE=~/code/myapp SANDBOX_HOME_VOLUME=myapp-home ./sandbox claude
+```
+
 ## Commands
 
 | Command | Effect |
@@ -72,6 +99,7 @@ once the volume exists; `./sandbox reset-home` returns it to the image version.
 | `SANDBOX_IMAGE` | `agent-sandbox:dev` | |
 | `SANDBOX_NAME` | `agent-sandbox` | Long-lived container name |
 | `SANDBOX_WORKSPACE` | `./workspace` | Host dir mounted at `/workspace` |
+| `SANDBOX_PROJECT` | autodetect | Subdirectory of the workspace to start in |
 | `SANDBOX_HOME_VOLUME` | `agent-sandbox-home` | Persistent `/home/dev` |
 | `SANDBOX_NET` | `bridge` | `none` blocks all network |
 | `SANDBOX_PORTS` | none | e.g. `"8080:8080 5173:5173"` |

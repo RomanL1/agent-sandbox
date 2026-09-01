@@ -48,6 +48,23 @@ MOUNT_FLAGS=(
   -v "$HOME_VOL:/home/dev"          # persistent: agent logins survive --rm
 )
 
+# Working directory inside the container. An explicit SANDBOX_PROJECT wins;
+# otherwise, running from inside workspace/ puts the agent in that same project,
+# so `cd workspace/myapp && ../../sandbox claude` starts where you already are.
+ws_real="$(cd "$WORKSPACE" 2>/dev/null && pwd -P || echo "$WORKSPACE")"
+cur_real="$(pwd -P)"
+if [ -n "${SANDBOX_PROJECT:-}" ]; then
+  [ -d "$ws_real/$SANDBOX_PROJECT" ] || {
+    echo "sandbox: no such project: $WORKSPACE/$SANDBOX_PROJECT" >&2; exit 1; }
+  WORKDIR="/workspace/$SANDBOX_PROJECT"
+else
+  case "$cur_real" in
+    "$ws_real") WORKDIR=/workspace ;;
+    "$ws_real"/*) WORKDIR="/workspace/${cur_real#"$ws_real"/}" ;;
+    *) WORKDIR=/workspace ;;
+  esac
+fi
+
 PORT_FLAGS=()
 for p in $PORTS; do PORT_FLAGS+=(-p "$p"); done
 
@@ -77,7 +94,7 @@ HARDEN_FLAGS=(
   --memory "$MEMORY"
 )
 
-RUN_FLAGS=(--network "$NET" "${ID_FLAGS[@]}" "${MOUNT_FLAGS[@]}"
+RUN_FLAGS=(-w "$WORKDIR" --network "$NET" "${ID_FLAGS[@]}" "${MOUNT_FLAGS[@]}"
            ${ENV_FLAGS[@]+"${ENV_FLAGS[@]}"} "${HARDEN_FLAGS[@]}")
 
 usage() {
@@ -96,7 +113,10 @@ usage: ./sandbox <command> [args]
   reset-home              delete the home volume (drops all sandbox logins)
   info                    engine, rootless status, resolved settings
 
-env: SANDBOX_ENGINE SANDBOX_IMAGE SANDBOX_NAME SANDBOX_WORKSPACE
+  Run from inside workspace/<project> and the agent starts in that project;
+  or set SANDBOX_PROJECT=<name> from anywhere.
+
+env: SANDBOX_ENGINE SANDBOX_IMAGE SANDBOX_NAME SANDBOX_WORKSPACE SANDBOX_PROJECT
      SANDBOX_HOME_VOLUME SANDBOX_NET SANDBOX_PORTS SANDBOX_MEMORY
 USAGE
 }
@@ -158,7 +178,7 @@ case "$cmd" in
 
   exec)
     [ $# -gt 0 ] || { echo "sandbox: exec needs a command" >&2; exit 2; }
-    exec "$ENGINE" exec -it "$NAME" "$@"
+    exec "$ENGINE" exec -it -w "$WORKDIR" "$NAME" "$@"
     ;;
 
   down) "$ENGINE" rm -f "$NAME" ;;
@@ -202,6 +222,7 @@ case "$cmd" in
     fi
     echo "image:     $IMAGE"
     echo "workspace: $WORKSPACE -> /workspace"
+    echo "workdir:   $WORKDIR"
     echo "home vol:  $HOME_VOL -> /home/dev"
     echo "network:   $NET   ports: ${PORTS:-<none>}   memory: $MEMORY"
     echo "env fwd:   ${ENV_FLAGS[*]:-<none>}" | sed -E 's/=[^ ]+/=***/g'
