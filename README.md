@@ -67,7 +67,7 @@ SANDBOX_WORKSPACE=~/code/myapp SANDBOX_HOME_VOLUME=myapp-home ./sandbox claude
 |---|---|
 | `build [args...]` | Build the image; extra args pass through to the engine |
 | `claude` / `codex` / `opencode` / `copilot` / `agy` | Run that agent with permissions bypassed, args forwarded |
-| `shell` | Interactive shell |
+| `shell` | Interactive root shell with a writable container filesystem |
 | `run <cmd...>` | One command in an ephemeral container |
 | `up` / `exec <cmd...>` / `down` / `ps` | Long-lived container lifecycle |
 | `import-creds [name...]` | Copy host agent logins into the sandbox volume |
@@ -79,7 +79,7 @@ SANDBOX_WORKSPACE=~/code/myapp SANDBOX_HOME_VOLUME=myapp-home ./sandbox claude
 | | |
 |---|---|
 | Agents | `claude`, `codex`, `opencode`, `copilot`, `agy` |
-| Toolchain | Node 22, Python 3.13, build-essential |
+| Toolchain | Node 24, Python 3.13, build-essential |
 | Dev tools | `git`, `gh`, `ripgrep`, `fd`, `jq`, `curl`, `vim` |
 
 Agents come from their official installers, which target `$HOME/.local/bin`.
@@ -114,9 +114,11 @@ through so agent-authored commits are attributed correctly.
 
 ## Isolation
 
-Containers run unprivileged: `--cap-drop=ALL`, `--security-opt
+Agent and `run` containers run unprivileged: `--cap-drop=ALL`, `--security-opt
 no-new-privileges`, a read-only root filesystem, a 2048 pid limit and a memory
 cap. Writable paths are `/workspace`, the `/home/dev` volume and a tmpfs `/tmp`.
+`./sandbox shell` is the deliberate exception: it starts as root with a writable
+container filesystem so packages can be installed for that ephemeral session.
 
 Nothing from your host home is mounted, so an agent running with
 `--dangerously-skip-permissions` (or Codex/opencode equivalents) cannot reach

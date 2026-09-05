@@ -6,7 +6,6 @@ FROM ${BASE}
 ARG USER=dev
 ARG UID=1000
 ARG GID=1000
-ARG NODE_VERSION=22.21.1
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -24,15 +23,16 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
  && apt-get update && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/*
 
-# Node from the official tarball, so the runtime is not tied to a distro release.
+# Node via nvm. Keep its versioned bin directory on a stable global path.
 RUN set -eux; \
-    case "$(dpkg --print-architecture)" in \
-      arm64) NODE_ARCH=arm64 ;; \
-      amd64) NODE_ARCH=x64 ;; \
-      *) echo "unsupported arch" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" \
-      | tar -xJ -C /usr/local --strip-components=1 --exclude=CHANGELOG.md --exclude=LICENSE --exclude=README.md
+    export HOME=/opt/node; \
+    mkdir -p "$HOME"; \
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.7/install.sh | bash; \
+    . "$HOME/.nvm/nvm.sh"; \
+    nvm install 24; \
+    ln -s "$NVM_BIN" /opt/node-bin
+
+ENV PATH=/opt/node-bin:$PATH
 
 # Agent CLIs via their official installers. They install into $HOME/.local/bin,
 # but /home/dev is a runtime volume that would mask anything placed there at
@@ -71,16 +71,14 @@ RUN set -eux; \
 RUN groupadd -g "${GID}" "${USER}" \
  && useradd -m -u "${UID}" -g "${GID}" -s /bin/bash "${USER}"
 
-# npm's global prefix stays /usr/local (root-owned, read-only at runtime), so
-# point user-level installs at the persistent home volume instead.
-ENV NPM_CONFIG_PREFIX=/home/dev/.npm-global \
-    PATH=/home/dev/.npm-global/bin:/home/dev/.local/bin:$PATH \
+# Keep user-level tools and the nvm-installed Node runtime available.
+ENV PATH=/home/dev/.npm-global/bin:/home/dev/.local/bin:/opt/node-bin:$PATH \
     NODE_NO_WARNINGS=1
 
-# A login shell reruns /etc/profile, which resets PATH and would drop the
-# user-level bin dirs; re-add them for interactive and `bash -l` sessions.
+# A login shell reruns /etc/profile, which resets PATH; restore the required
+# bin dirs for interactive and `bash -l` sessions.
 RUN printf '%s\n' \
-      'PATH="/home/dev/.npm-global/bin:/home/dev/.local/bin:$PATH"' \
+      'PATH="/home/dev/.npm-global/bin:/home/dev/.local/bin:/opt/node-bin:$PATH"' \
       'export PATH' \
       > /etc/profile.d/10-sandbox-path.sh
 

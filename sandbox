@@ -83,26 +83,32 @@ ge="$(git config --global user.email 2>/dev/null || true)"
 [ -n "$gn" ] && ENV_FLAGS+=(-e "GIT_AUTHOR_NAME=$gn" -e "GIT_COMMITTER_NAME=$gn")
 [ -n "$ge" ] && ENV_FLAGS+=(-e "GIT_AUTHOR_EMAIL=$ge" -e "GIT_COMMITTER_EMAIL=$ge")
 
-# Unprivileged, no privilege escalation, immutable root filesystem. The agents
-# get a writable /workspace, a writable persistent /home/dev, and /tmp.
-HARDEN_FLAGS=(
-  --security-opt no-new-privileges
-  --cap-drop=ALL
-  --read-only
+# Resource limits shared by root shells and hardened agent containers.
+RESOURCE_FLAGS=(
   --tmpfs /tmp:rw,nosuid,nodev,size=2g,mode=1777
   --pids-limit 2048
   --memory "$MEMORY"
 )
 
-RUN_FLAGS=(-w "$WORKDIR" --network "$NET" "${ID_FLAGS[@]}" "${MOUNT_FLAGS[@]}"
-           ${ENV_FLAGS[@]+"${ENV_FLAGS[@]}"} "${HARDEN_FLAGS[@]}")
+# Agent containers are unprivileged, immutable, and unable to escalate.
+HARDEN_FLAGS=(
+  --security-opt no-new-privileges
+  --cap-drop=ALL
+  --read-only
+  "${RESOURCE_FLAGS[@]}"
+)
+
+COMMON_FLAGS=(-w "$WORKDIR" --network "$NET" "${MOUNT_FLAGS[@]}"
+              ${ENV_FLAGS[@]+"${ENV_FLAGS[@]}"})
+RUN_FLAGS=("${COMMON_FLAGS[@]}" "${ID_FLAGS[@]}" "${HARDEN_FLAGS[@]}")
+SHELL_FLAGS=("${COMMON_FLAGS[@]}" --user 0 --env HOME=/home/dev "${RESOURCE_FLAGS[@]}")
 
 usage() {
   cat <<'USAGE'
 usage: ./sandbox <command> [args]
 
   build [args...]         build the image (extra args go to the engine)
-  shell                   interactive shell (ephemeral container, persistent home)
+  shell                   root shell (ephemeral container, persistent home)
   claude|codex|opencode|copilot|agy [args...]
                           run that agent with its permission bypass enabled
                           (SANDBOX_NO_BYPASS=1 restores the prompts)
@@ -133,7 +139,7 @@ case "$cmd" in
 
   shell)
     ensure_home_vol
-    exec "$ENGINE" run --rm -it "${RUN_FLAGS[@]}" ${PORT_FLAGS[@]+"${PORT_FLAGS[@]}"} "$IMAGE" bash -l
+    exec "$ENGINE" run --rm -it "${SHELL_FLAGS[@]}" ${PORT_FLAGS[@]+"${PORT_FLAGS[@]}"} "$IMAGE" bash -l
     ;;
 
   claude|codex|opencode|copilot|agy)
