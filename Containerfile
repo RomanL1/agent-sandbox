@@ -80,6 +80,9 @@ ENV PATH=/home/dev/.npm-global/bin:/home/dev/.local/bin:/opt/node-bin:$PATH \
 RUN printf '%s\n' \
       'PATH="/home/dev/.npm-global/bin:/home/dev/.local/bin:/opt/node-bin:$PATH"' \
       'export PATH' \
+      '# User-level tools installed at runtime register themselves here (it lives' \
+      '# on the persistent home volume), so adding one never needs a rebuild.' \
+      '[ -r /home/dev/.sandbox-env ] && . /home/dev/.sandbox-env' \
       > /etc/profile.d/10-sandbox-path.sh
 
 # Shell functions so agents started from an interactive sandbox shell get the
@@ -110,4 +113,8 @@ PROFILE
 
 USER ${USER}
 WORKDIR /workspace
+# Start every command through a login shell so directly exec'd agents see the
+# same environment as `./sandbox shell`, including ~/.sandbox-env. `exec` skips
+# the bypass functions above, so the launcher's own flags are not doubled.
+ENTRYPOINT ["bash", "-lc", "exec \"$@\"", "--"]
 CMD ["bash", "-l"]

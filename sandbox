@@ -184,7 +184,8 @@ case "$cmd" in
 
   exec)
     [ $# -gt 0 ] || { echo "sandbox: exec needs a command" >&2; exit 2; }
-    exec "$ENGINE" exec -it -w "$WORKDIR" "$NAME" "$@"
+    # `exec` bypasses the image entrypoint, so go through a login shell here too.
+    exec "$ENGINE" exec -it -w "$WORKDIR" "$NAME" bash -lc 'exec "$@"' -- "$@"
     ;;
 
   down) "$ENGINE" rm -f "$NAME" ;;

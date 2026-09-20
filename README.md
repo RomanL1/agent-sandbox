@@ -91,6 +91,21 @@ Claude Code relocates itself to `~/.local/share/claude` on first run and
 self-updates from there, so its version tracks the volume rather than the image
 once the volume exists; `./sandbox reset-home` returns it to the image version.
 
+### Adding tools without a rebuild
+
+Anything installed under `/home/dev` persists on the home volume. Every command
+starts through a login shell that sources `~/.sandbox-env`, so a tool only needs
+to put itself on `PATH` there:
+
+```bash
+./sandbox shell
+curl -fsSL https://bun.sh/install | bash
+echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.sandbox-env
+```
+
+The next `./sandbox codex` sees `bun`. System packages (`apt`, root `npm -g`)
+land in the ephemeral container layer and still belong in the `Containerfile`.
+
 ## Configuration
 
 | Variable | Default | Notes |
