@@ -43,7 +43,7 @@ ENV AGENT_HOME=/opt/agents
 RUN set -eux; mkdir -p "$AGENT_HOME"; \
     HOME="$AGENT_HOME" bash -c 'curl -fsSL https://claude.ai/install.sh | bash'; \
     HOME="$AGENT_HOME" bash -c 'curl -fsSL https://chatgpt.com/codex/install.sh | sh'; \
-    HOME="$AGENT_HOME" bash -c 'curl -fsSL https://opencode.ai/install | bash'; \
+    HOME="$AGENT_HOME" bash -c 'curl -fsSL https://opencode.ai/v2/install | bash'; \
     npm install -g --no-fund --no-audit @github/copilot; \
     npm cache clean --force
 
@@ -101,12 +101,16 @@ if [ -z "${SANDBOX_NO_BYPASS:-}" ]; then
   agy()     { _sb_wrap agy     --dangerously-skip-permissions "$@"; }
   codex()   { _sb_wrap codex   --dangerously-bypass-approvals-and-sandbox "$@"; }
   copilot() { _sb_wrap copilot --allow-all "$@"; }
-  # opencode only accepts --auto on `run`; its TUI has no bypass flag.
+  # opencode takes --auto on `run` and the TUI, not on other subcommands.
   opencode() {
-    if [ "${1:-}" != run ]; then command opencode "$@"; return; fi
-    shift                          # --auto is a flag of `run`, so it goes after it
-    if _sb_has --auto "$@"; then command opencode run "$@";
-    else command opencode run --auto "$@"; fi
+    case "${1:-}" in
+      run)
+        shift                      # --auto is a flag of `run`, so it goes after it
+        if _sb_has --auto "$@"; then command opencode run "$@";
+        else command opencode run --auto "$@"; fi ;;
+      ""|-*) _sb_wrap opencode --auto "$@" ;;
+      *) command opencode "$@" ;;
+    esac
   }
 fi
 PROFILE

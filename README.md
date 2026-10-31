@@ -28,7 +28,7 @@ inside the sandbox to reach the unwrapped binary.
 | `agy` | `--dangerously-skip-permissions` |
 | `codex` | `--dangerously-bypass-approvals-and-sandbox` |
 | `copilot` | `--allow-all` |
-| `opencode` | `--auto`, on `opencode run` only — the TUI has no bypass flag |
+| `opencode` | `--auto`, on the TUI and `opencode run` — not with a directory argument or other subcommands |
 
 A flag you pass yourself is not duplicated (codex rejects the repeat).
 

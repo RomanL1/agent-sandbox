@@ -153,8 +153,8 @@ case "$cmd" in
         claude|agy) BYPASS=(--dangerously-skip-permissions) ;;
         codex)      BYPASS=(--dangerously-bypass-approvals-and-sandbox) ;;
         copilot)    BYPASS=(--allow-all) ;;
-        # opencode only accepts --auto on `run`; its TUI has no bypass flag.
-        opencode)   [ "${1:-}" = run ] && BYPASS=(--auto) ;;
+        # opencode takes --auto on `run` and the TUI, not on other subcommands.
+        opencode)   case "${1:-}" in run|""|-*) BYPASS=(--auto) ;; esac ;;
       esac
       # Don't double up if the caller already passed the flag.
       for a in "$@"; do
