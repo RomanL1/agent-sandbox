@@ -79,7 +79,7 @@ SANDBOX_WORKSPACE=~/code/myapp SANDBOX_HOME_VOLUME=myapp-home ./sandbox claude
 | | |
 |---|---|
 | Agents | `claude`, `codex`, `opencode`, `copilot`, `agy` |
-| Toolchain | Node 24, Python 3.13, build-essential |
+| Toolchain | Node 26, Python 3.13, build-essential |
 | Dev tools | `git`, `gh`, `ripgrep`, `fd`, `jq`, `curl`, `vim` |
 
 Agents come from their official installers, which target `$HOME/.local/bin`.

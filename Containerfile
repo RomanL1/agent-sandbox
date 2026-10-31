@@ -27,9 +27,9 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 RUN set -eux; \
     export HOME=/opt/node; \
     mkdir -p "$HOME"; \
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.7/install.sh | bash; \
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh | bash; \
     . "$HOME/.nvm/nvm.sh"; \
-    nvm install 24; \
+    nvm install 26; \
     ln -s "$NVM_BIN" /opt/node-bin
 
 ENV PATH=/opt/node-bin:$PATH
