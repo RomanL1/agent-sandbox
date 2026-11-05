@@ -24,6 +24,15 @@ die() { echo "sandbox: $*" >&2; exit 1; }
 
 vm_running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
 
+# Options before the command: -w/--workspace DIR is SANDBOX_WORKSPACE=DIR.
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -w|--workspace) [ $# -ge 2 ] || die "$1 needs a directory"; SANDBOX_WORKSPACE="$2"; shift 2 ;;
+    --workspace=*) SANDBOX_WORKSPACE="${1#*=}"; shift ;;
+    *) break ;;
+  esac
+done
+
 # Shared host directory. An explicit SANDBOX_WORKSPACE wins; otherwise a running
 # VM keeps the workspace it booted with, so later commands need no variable.
 if [ -n "${SANDBOX_WORKSPACE:-}" ]; then
@@ -216,7 +225,9 @@ ensure_image() {
 
 usage() {
   cat <<'USAGE'
-usage: ./sandbox <command> [args]
+usage: ./sandbox [-w|--workspace DIR] <command> [args]
+
+  -w, --workspace DIR     share DIR at /workspace (same as SANDBOX_WORKSPACE)
 
   init                    install qemu, fetch the image, create and provision the VM
   provision               rerun provision.sh (after editing it, or if init was cut short)

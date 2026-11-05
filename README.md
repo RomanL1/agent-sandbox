@@ -69,7 +69,7 @@ is fixed when the VM boots, so stop it first:
 
 ```sh
 ./sandbox stop
-SANDBOX_WORKSPACE=~/code/myapp ./sandbox claude
+./sandbox -w ~/code/myapp claude     # or: SANDBOX_WORKSPACE=~/code/myapp
 ```
 
 While the VM runs, later commands keep using that directory without the
