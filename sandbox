@@ -90,6 +90,20 @@ remote_cmd() {
 # Interactive when we have a terminal, plain pipes otherwise (scripts, CI).
 tty_flag() { if [ -t 0 ] && [ -t 1 ]; then echo -t; else echo -T; fi; }
 
+# session <ssh args...>: run an ssh session, then put the terminal back. A TUI
+# that dies with the connection (VM stopped, ssh dropped, crash) never undoes
+# mouse tracking, the alternate screen or bracketed paste, and the terminal
+# then types mouse movements into your shell.
+session() {
+  local rc=0
+  ssh "${SSH_OPTS[@]}" "$@" || rc=$?
+  if [ -t 1 ]; then
+    printf '\e[?1000l\e[?1002l\e[?1003l\e[?1006l\e[?1015l\e[?1004l\e[?2004l\e[<u\e[?1049l\e[?25h'
+    stty sane 2>/dev/null || true
+  fi
+  exit "$rc"
+}
+
 vm_running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
 
 firmware() {
@@ -246,25 +260,25 @@ case "$cmd" in
 
   claude|codex|opencode|copilot|agy)
     start_vm
-    exec ssh "${SSH_OPTS[@]}" ${SSH_ENV[@]+"${SSH_ENV[@]}"} "$(tty_flag)" dev@127.0.0.1 \
+    session ${SSH_ENV[@]+"${SSH_ENV[@]}"} "$(tty_flag)" dev@127.0.0.1 \
       "$(remote_cmd "$cmd" "$@")"
     ;;
 
   shell)
     start_vm
-    exec ssh "${SSH_OPTS[@]}" ${SSH_ENV[@]+"${SSH_ENV[@]}"} -t dev@127.0.0.1 \
+    session ${SSH_ENV[@]+"${SSH_ENV[@]}"} -t dev@127.0.0.1 \
       "$(printf 'cd %q && exec bash -l' "$WORKDIR")"
     ;;
 
   root)
     start_vm
-    exec ssh "${SSH_OPTS[@]}" -t debian@127.0.0.1 'sudo -i'
+    session -t debian@127.0.0.1 'sudo -i'
     ;;
 
   run)
     [ $# -gt 0 ] || die "run needs a command"
     start_vm
-    exec ssh "${SSH_OPTS[@]}" ${SSH_ENV[@]+"${SSH_ENV[@]}"} "$(tty_flag)" dev@127.0.0.1 \
+    session ${SSH_ENV[@]+"${SSH_ENV[@]}"} "$(tty_flag)" dev@127.0.0.1 \
       "$(remote_cmd "$@")"
     ;;
 
