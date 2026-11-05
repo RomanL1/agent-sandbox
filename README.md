@@ -1,6 +1,6 @@
 # agent-sandbox
 
-Version 0.2.0. Check an install with `sandbox version`.
+Version 0.2.1. Check an install with `sandbox version`.
 
 QEMU VM sandbox for agentic development on macOS. Claude Code, Codex, opencode,
 GitHub Copilot CLI and Antigravity (`agy`) run inside a Debian VM that sees
