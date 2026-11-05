@@ -14,6 +14,16 @@ done
 ROOT="$(cd "$(dirname "$src")" && pwd)"
 unset src dir
 VM_DIR="${SANDBOX_VM_DIR:-$ROOT/vm}"
+CONFIG="$VM_DIR/config"
+
+# Settings chosen at init live in vm/config as KEY=value lines. Variables set
+# in the environment win over the file.
+CONFIG_KEYS="SANDBOX_CPUS SANDBOX_MEMORY SANDBOX_DISK_SIZE SANDBOX_GIT"
+if [ -f "$CONFIG" ]; then
+  while IFS='=' read -r k v; do
+    case " $CONFIG_KEYS " in *" $k "*) [ -n "${!k+x}" ] || export "$k=$v" ;; esac
+  done < "$CONFIG"
+fi
 BASE_IMAGE="${SANDBOX_BASE_IMAGE:-$VM_DIR/debian-13-arm64.qcow2}"
 IMAGE_URL="https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-arm64.qcow2"
 NET="${SANDBOX_NET:-user}"         # "none" keeps ssh but blocks all egress
@@ -23,6 +33,7 @@ CPUS="${SANDBOX_CPUS:-4}"
 DISK_SIZE="${SANDBOX_DISK_SIZE:-40G}"
 SSH_PORT="${SANDBOX_SSH_PORT:-2222}"
 HOST_HOME="${SANDBOX_HOST_HOME:-$HOME}"
+GIT_FWD="${SANDBOX_GIT:-1}"        # 0 keeps your git name and email out of the VM
 
 DISK="$VM_DIR/disk.qcow2"
 SEED="$VM_DIR/seed.iso"
@@ -32,13 +43,28 @@ BOOTED_WS="$VM_DIR/workspace.path"  # workspace the running VM was started with
 
 die() { echo "sandbox: $*" >&2; exit 1; }
 
+# Prompts read the terminal directly, so they work under `curl | bash` too.
+# Without a terminal, ask returns the default and confirm says no.
+have_tty() { { : </dev/tty; } 2>/dev/null; }
+ask() {  # ask <question> <default>
+  local a=
+  if have_tty; then printf '%s [%s]: ' "$1" "$2" >/dev/tty; read -r a </dev/tty || a=; fi
+  echo "${a:-$2}"
+}
+confirm() {  # confirm <question>; Enter means yes
+  local a
+  have_tty || return 1
+  printf '%s [Y/n] ' "$1" >/dev/tty; read -r a </dev/tty || return 1
+  case "$a" in ""|y|Y|yes) return 0 ;; *) return 1 ;; esac
+}
+
 vm_running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
 
 # Options before the command: -w/--workspace DIR is SANDBOX_WORKSPACE=DIR.
 while [ $# -gt 0 ]; do
   case "$1" in
-    -w|--workspace) [ $# -ge 2 ] || die "$1 needs a directory"; SANDBOX_WORKSPACE="$2"; shift 2 ;;
-    --workspace=*) SANDBOX_WORKSPACE="${1#*=}"; shift ;;
+    -w|--workspace) [ $# -ge 2 ] || die "$1 needs a directory"; export SANDBOX_WORKSPACE="$2"; shift 2 ;;
+    --workspace=*) export SANDBOX_WORKSPACE="${1#*=}"; shift ;;
     *) break ;;
   esac
 done
@@ -93,6 +119,7 @@ done
 # Git identity, so agent-authored commits are attributed correctly.
 gn="$(git config --global user.name 2>/dev/null || true)"
 ge="$(git config --global user.email 2>/dev/null || true)"
+if [ "$GIT_FWD" != 1 ]; then gn= ge=; fi
 if [ -n "$gn" ]; then
   export GIT_AUTHOR_NAME="$gn" GIT_COMMITTER_NAME="$gn"
   SSH_ENV+=(-o SendEnv=GIT_AUTHOR_NAME -o SendEnv=GIT_COMMITTER_NAME)
@@ -234,6 +261,47 @@ ensure_image() {
   mv "$BASE_IMAGE.part" "$BASE_IMAGE"
 }
 
+# Ask for the VM's resources and git forwarding once, and save them to
+# vm/config. Without a terminal the defaults are saved.
+configure() {
+  local host_cpus host_mem v
+  host_cpus="$(sysctl -n hw.ncpu)"
+  host_mem="$(( $(sysctl -n hw.memsize) / 1073741824 ))G"
+  have_tty && echo "VM settings (Enter keeps the default; edit $CONFIG later):"
+  while v="$(ask "  CPUs (this Mac has $host_cpus)" "$CPUS")"; do
+    [[ "$v" =~ ^[1-9][0-9]*$ ]] && [ "$v" -le "$host_cpus" ] && break
+    echo "  enter a number from 1 to $host_cpus"; have_tty || die "invalid SANDBOX_CPUS: $v"
+  done; CPUS="$v"
+  while v="$(ask "  Memory, e.g. 4G or 8G (this Mac has $host_mem)" "$MEMORY")"; do
+    [[ "$v" =~ ^[1-9][0-9]*[MG]$ ]] && break
+    echo "  enter a size like 4G or 4096M"; have_tty || die "invalid SANDBOX_MEMORY: $v"
+  done; MEMORY="$v"
+  while v="$(ask "  Disk size limit (grows as used)" "$DISK_SIZE")"; do
+    [[ "$v" =~ ^[1-9][0-9]*[MGT]$ ]] && break
+    echo "  enter a size like 40G"; have_tty || die "invalid SANDBOX_DISK_SIZE: $v"
+  done; DISK_SIZE="$v"
+  if [ -n "$gn$ge" ] && have_tty && [ -z "${SANDBOX_GIT+x}" ]; then
+    if confirm "  Pass your git name and email ($gn <$ge>) into the VM for commits?"; then
+      GIT_FWD=1; else GIT_FWD=0; fi
+  fi
+  mkdir -p "$VM_DIR"
+  printf 'SANDBOX_CPUS=%s\nSANDBOX_MEMORY=%s\nSANDBOX_DISK_SIZE=%s\nSANDBOX_GIT=%s\n' \
+    "$CPUS" "$MEMORY" "$DISK_SIZE" "$GIT_FWD" > "$CONFIG"
+  echo "Saved $CONFIG"
+}
+
+# Commands that need a working VM offer to build or finish it first.
+ensure_ready() {
+  if [ ! -f "$DISK" ]; then
+    confirm "No VM yet. Create it now (several minutes)?" || die "no VM yet: run sandbox init"
+    "$0" init
+  elif [ ! -f "$VM_DIR/provisioned" ]; then
+    confirm "The VM was never fully provisioned (init cut short?). Provision it now?" ||
+      die "VM is not provisioned; run: sandbox provision"
+    "$0" provision
+  fi
+}
+
 usage() {
   cat <<'USAGE'
 usage: ./sandbox [-w|--workspace DIR] <command> [args]
@@ -259,15 +327,20 @@ usage: ./sandbox [-w|--workspace DIR] <command> [args]
 
 env: SANDBOX_WORKSPACE SANDBOX_PROJECT SANDBOX_NET SANDBOX_PORTS SANDBOX_MEMORY
      SANDBOX_CPUS SANDBOX_DISK_SIZE SANDBOX_SSH_PORT SANDBOX_VM_DIR
-     SANDBOX_BASE_IMAGE SANDBOX_HOST_HOME
+     SANDBOX_BASE_IMAGE SANDBOX_HOST_HOME SANDBOX_GIT
+     init saves CPUs, memory, disk size and SANDBOX_GIT to vm/config
 USAGE
 }
 
 cmd="${1:-}"; shift || true
 case "$cmd" in
+  claude|codex|opencode|copilot|agy|shell|root|run|start|import-creds) ensure_ready ;;
+esac
+case "$cmd" in
   init)
     [ ! -f "$DISK" ] || die "VM already exists at $DISK; ./sandbox destroy to start over"
     mkdir -p "$VM_DIR"
+    [ -f "$CONFIG" ] || configure
     ensure_qemu
     ensure_image
     [ -f "$KEY" ] || ssh-keygen -q -t ed25519 -N "" -C agent-sandbox -f "$KEY"
@@ -353,7 +426,9 @@ case "$cmd" in
     echo "base:      $BASE_IMAGE"
     echo "workspace: $WORKSPACE -> /workspace"
     echo "workdir:   $WORKDIR"
-    echo "resources: $CPUS cpus, $MEMORY memory"
+    echo "config:    $CONFIG$([ -f "$CONFIG" ] || echo ' (not created yet)')"
+    echo "resources: $CPUS cpus, $MEMORY memory, $DISK_SIZE disk"
+    echo "git fwd:   $([ "$GIT_FWD" = 1 ] && echo on || echo off)"
     echo "network:   $NET   ssh: 127.0.0.1:$SSH_PORT   ports: ${PORTS:-<none>}"
     echo "env fwd:   ${SSH_ENV[*]:-<none>}" | sed 's/-o SendEnv=//g'
     ;;

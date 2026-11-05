@@ -40,7 +40,7 @@ short (a VM disk without the `vm/provisioned` marker gets provisioned again).
 | Path | Contents |
 |---|---|
 | `~/.agent-sandbox/` | The repo checkout |
-| `~/.agent-sandbox/vm/` | VM disk, Debian image (~430 MB), ssh key, seed, console log |
+| `~/.agent-sandbox/vm/` | VM disk, Debian image (~430 MB), ssh key, seed, console log, `config` |
 | `~/.agent-sandbox/workspace/` | Shared with the VM at `/workspace` |
 | `~/.local/bin/sandbox` | Link to `~/.agent-sandbox/sandbox` |
 | Homebrew | `qemu` |
@@ -70,13 +70,16 @@ Instead of the installer:
 
 `init` runs once and takes several minutes. It:
 
-1. installs QEMU with Homebrew if `qemu-system-aarch64` is missing;
-2. downloads the Debian 13 arm64 cloud image (~430 MB) to `vm/` and checks it
+1. asks for the VM's CPUs, memory and disk size, and whether to pass your git
+   name and email into the VM, and saves the answers to `vm/config` (skipped
+   if that file exists; without a terminal the defaults are saved);
+2. installs QEMU with Homebrew if `qemu-system-aarch64` is missing;
+3. downloads the Debian 13 arm64 cloud image (~430 MB) to `vm/` and checks it
    against Debian's `SHA512SUMS`;
-3. creates the VM disk as a copy-on-write overlay of that image, plus an ssh
+4. creates the VM disk as a copy-on-write overlay of that image, plus an ssh
    key and a cloud-init seed, all in `vm/`;
-4. boots the VM and waits for ssh;
-5. runs [`provision.sh`](provision.sh) as root: packages, Node, firewall, shell
+5. boots the VM and waits for ssh;
+6. runs [`provision.sh`](provision.sh) as root: packages, Node, firewall, shell
    wrappers, then the agent CLIs as `dev`.
 
 Then (`sandbox` after the installer, `./sandbox` in a clone):
@@ -135,7 +138,7 @@ subdirectory: `cd ~/code/myapp/src && ~/agent-sandbox/sandbox codex`.
 
 | Command | Effect |
 |---|---|
-| `init` | Install QEMU, fetch the image, create and provision the VM (once) |
+| `init` | Ask for VM settings, install QEMU, fetch the image, create and provision the VM (once) |
 | `provision` | Rerun `provision.sh`, after editing it or if `init` was cut short |
 | `start` / `stop` / `status` | VM lifecycle; agent commands start it on demand |
 | `claude` / `codex` / `opencode` / `copilot` / `agy` | Run that agent with permissions bypassed, args forwarded |
@@ -179,15 +182,24 @@ echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.sandbox-env
 
 ## Configuration
 
+`init` saves CPUs, memory, disk size and git forwarding to `vm/config`, one
+`KEY=value` per line. Edit it to change them; `destroy` keeps it, so a rebuild
+reuses your answers. Memory and CPUs take effect on the next `start`, disk size
+only on the next `init`. Variables set in your shell override the file.
+
+Running an agent (or `shell`, `run`, …) before the VM exists offers to run
+`init`; a VM whose `init` was cut short offers `provision`.
+
 | Variable | Default | Notes |
 |---|---|---|
 | `SANDBOX_WORKSPACE` | running VM's, else `./workspace` | Host dir shared at `/workspace`; fixed at boot |
 | `SANDBOX_PROJECT` | autodetect | Subdirectory of the workspace to start in |
 | `SANDBOX_NET` | `user` | `none` blocks all egress (ssh still works) |
 | `SANDBOX_PORTS` | none | e.g. `"8080:8080 5173:5173"`, on `127.0.0.1`; fixed at boot |
-| `SANDBOX_MEMORY` | `4G` | VM RAM; fixed at boot |
-| `SANDBOX_CPUS` | `4` | |
-| `SANDBOX_DISK_SIZE` | `40G` | Set before `init` |
+| `SANDBOX_MEMORY` | `4G` | VM RAM; fixed at boot. Saved in `vm/config` |
+| `SANDBOX_CPUS` | `4` | Saved in `vm/config` |
+| `SANDBOX_DISK_SIZE` | `40G` | Used by `init`. Saved in `vm/config` |
+| `SANDBOX_GIT` | `1` | `0` keeps your git name and email out of the VM. Saved in `vm/config` |
 | `SANDBOX_SSH_PORT` | `2222` | Host port for the VM's ssh |
 | `SANDBOX_VM_DIR` | `./vm` | Disk, seed, key, logs |
 | `SANDBOX_BASE_IMAGE` | `./vm/debian-13-arm64.qcow2` | |
@@ -198,7 +210,7 @@ API keys present in the calling shell are forwarded (`ANTHROPIC_API_KEY`,
 `OPENAI_API_KEY`, `GITHUB_TOKEN`, `GEMINI_API_KEY`, proxy vars, …) as ssh
 environment, so they never show up on a command line. Your global git
 `user.name` and `user.email` are passed through so agent-authored commits are
-attributed correctly.
+attributed correctly, unless you said no at `init` (`SANDBOX_GIT=0`).
 
 ## Isolation
 

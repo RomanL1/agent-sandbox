@@ -79,13 +79,15 @@ mkdir -p "$BIN_DIR"
 ln -sfn "$DEST/sandbox" "$BIN_DIR/sandbox"
 say "Linked $BIN_DIR/sandbox"
 
+# </dev/null: under `curl | bash` stdin is this script, and ssh inside init
+# would otherwise read (and swallow) the rest of it.
 if [ -z "${SANDBOX_SKIP_INIT:-}" ]; then
   if [ ! -f "$VM_DIR/disk.qcow2" ]; then
     say "Creating the VM (several minutes)"
-    "$DEST/sandbox" init
+    "$DEST/sandbox" init </dev/null
   elif [ ! -f "$VM_DIR/provisioned" ]; then
     say "VM exists but was never fully provisioned; provisioning"
-    "$DEST/sandbox" provision
+    "$DEST/sandbox" provision </dev/null
   else
     say "VM already provisioned"
   fi
