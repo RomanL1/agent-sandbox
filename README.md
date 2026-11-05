@@ -72,6 +72,10 @@ is fixed when the VM boots, so stop it first:
 SANDBOX_WORKSPACE=~/code/myapp ./sandbox claude
 ```
 
+While the VM runs, later commands keep using that directory without the
+variable, and running from inside it starts the agent in the matching
+subdirectory: `cd ~/code/myapp/src && ~/agent-sandbox/sandbox codex`.
+
 ## Commands
 
 | Command | Effect |
@@ -121,7 +125,7 @@ echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.sandbox-env
 
 | Variable | Default | Notes |
 |---|---|---|
-| `SANDBOX_WORKSPACE` | `./workspace` | Host dir shared at `/workspace`; fixed at boot |
+| `SANDBOX_WORKSPACE` | running VM's, else `./workspace` | Host dir shared at `/workspace`; fixed at boot |
 | `SANDBOX_PROJECT` | autodetect | Subdirectory of the workspace to start in |
 | `SANDBOX_NET` | `user` | `none` blocks all egress (ssh still works) |
 | `SANDBOX_PORTS` | none | e.g. `"8080:8080 5173:5173"`, on `127.0.0.1`; fixed at boot |

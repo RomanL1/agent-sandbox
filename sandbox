@@ -6,7 +6,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VM_DIR="${SANDBOX_VM_DIR:-$ROOT/vm}"
 BASE_IMAGE="${SANDBOX_BASE_IMAGE:-$VM_DIR/debian-13-arm64.qcow2}"
 IMAGE_URL="https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-arm64.qcow2"
-WORKSPACE="${SANDBOX_WORKSPACE:-$ROOT/workspace}"
 NET="${SANDBOX_NET:-user}"         # "none" keeps ssh but blocks all egress
 PORTS="${SANDBOX_PORTS:-}"         # e.g. "8080:8080 5173:5173", bound to 127.0.0.1
 MEMORY="${SANDBOX_MEMORY:-4G}"
@@ -22,6 +21,18 @@ PIDFILE="$VM_DIR/qemu.pid"
 BOOTED_WS="$VM_DIR/workspace.path"  # workspace the running VM was started with
 
 die() { echo "sandbox: $*" >&2; exit 1; }
+
+vm_running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
+
+# Shared host directory. An explicit SANDBOX_WORKSPACE wins; otherwise a running
+# VM keeps the workspace it booted with, so later commands need no variable.
+if [ -n "${SANDBOX_WORKSPACE:-}" ]; then
+  WORKSPACE="$SANDBOX_WORKSPACE"
+elif vm_running && [ -s "$BOOTED_WS" ]; then
+  WORKSPACE="$(cat "$BOOTED_WS")"
+else
+  WORKSPACE="$ROOT/workspace"
+fi
 
 # Host config dirs each agent keeps its credentials and settings in.
 CRED_PATHS=(
@@ -103,8 +114,6 @@ session() {
   fi
   exit "$rc"
 }
-
-vm_running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
 
 firmware() {
   local qemu f
