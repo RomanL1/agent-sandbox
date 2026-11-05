@@ -1,13 +1,68 @@
 # agent-sandbox
 
+Version 0.2.0. Check an install with `sandbox version`.
+
 QEMU VM sandbox for agentic development on macOS. Claude Code, Codex, opencode,
 GitHub Copilot CLI and Antigravity (`agy`) run inside a Debian VM that sees
 `workspace/` and nothing else from your Mac.
 
 ## Setup
 
-Needs an Apple Silicon Mac with [Homebrew](https://brew.sh). One command does
-the rest:
+**Platform:** macOS on Apple Silicon only, with [Homebrew](https://brew.sh).
+Linux and Intel Macs are not supported: the launcher relies on macOS tools
+(`hdiutil`) and an arm64 guest image, and the installer exits on anything else.
+
+### Install
+
+One command:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/RomanL1/agent-sandbox/main/install.sh | bash
+```
+
+[`install.sh`](install.sh) clones the repo to `~/.agent-sandbox`, links
+`sandbox` into `~/.local/bin` (it tells you if that is not on your `PATH`), and
+runs `sandbox init`.
+
+It is idempotent: rerun it any time to update. It fast-forwards the checkout,
+skips the VM if it is already provisioned, and finishes an `init` that was cut
+short (a VM disk without the `vm/provisioned` marker gets provisioned again).
+
+| Variable | Default | |
+|---|---|---|
+| `SANDBOX_HOME` | `~/.agent-sandbox` | Where the repo is cloned |
+| `SANDBOX_BIN_DIR` | `~/.local/bin` | Where the `sandbox` link goes |
+| `SANDBOX_BRANCH` | `main` | Branch to install |
+| `SANDBOX_SKIP_INIT` | unset | `1` installs without creating the VM |
+
+### Where files live
+
+| Path | Contents |
+|---|---|
+| `~/.agent-sandbox/` | The repo checkout |
+| `~/.agent-sandbox/vm/` | VM disk, Debian image (~430 MB), ssh key, seed, console log |
+| `~/.agent-sandbox/workspace/` | Shared with the VM at `/workspace` |
+| `~/.local/bin/sandbox` | Link to `~/.agent-sandbox/sandbox` |
+| Homebrew | `qemu` |
+
+Logins made inside the VM live on the VM disk, not on your Mac.
+
+### Uninstall
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/RomanL1/agent-sandbox/main/install.sh | bash -s -- --uninstall
+```
+
+It asks for confirmation, stops the VM, and deletes the checkout, `vm/` (disk,
+Debian image, key, every login in the VM) and the `sandbox` link. If
+`workspace/` holds files it asks whether to delete them; answer no and they
+move to `~/agent-sandbox-workspace`. QEMU stays, since other tools may use it;
+`brew uninstall qemu` removes it. Pass the same `SANDBOX_HOME` /
+`SANDBOX_BIN_DIR` you installed with.
+
+### From a clone
+
+Instead of the installer:
 
 ```sh
 ./sandbox init
@@ -24,10 +79,10 @@ the rest:
 5. runs [`provision.sh`](provision.sh) as root: packages, Node, firewall, shell
    wrappers, then the agent CLIs as `dev`.
 
-Then:
+Then (`sandbox` after the installer, `./sandbox` in a clone):
 
 ```sh
-./sandbox claude          # or: codex / opencode / copilot / agy
+sandbox claude            # or: codex / opencode / copilot / agy
 ```
 
 Log each agent in on its first run, or copy host logins with `import-creds`.
@@ -90,6 +145,7 @@ subdirectory: `cd ~/code/myapp/src && ~/agent-sandbox/sandbox codex`.
 | `import-creds [name...]` | Copy host agent logins into the VM |
 | `destroy` | Delete the VM disk, dropping all VM state and logins |
 | `info` | Resolved settings |
+| `version` | Print the version (also `--version`) |
 
 ## What is in the VM
 

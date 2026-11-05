@@ -2,7 +2,17 @@
 # Agentic dev sandbox: a QEMU Linux VM on macOS, driven over ssh.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VERSION=0.2.0
+
+# Follow symlinks (e.g. ~/.local/bin/sandbox from install.sh) to the checkout.
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir="$(cd "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  case "$src" in /*) ;; *) src="$dir/$src" ;; esac
+done
+ROOT="$(cd "$(dirname "$src")" && pwd)"
+unset src dir
 VM_DIR="${SANDBOX_VM_DIR:-$ROOT/vm}"
 BASE_IMAGE="${SANDBOX_BASE_IMAGE:-$VM_DIR/debian-13-arm64.qcow2}"
 IMAGE_URL="https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-arm64.qcow2"
@@ -242,6 +252,7 @@ usage: ./sandbox [-w|--workspace DIR] <command> [args]
   import-creds [name...]  copy host agent logins into the VM
   destroy                 delete the VM disk (drops all VM state and logins)
   info                    resolved settings
+  version                 print the version
 
   Run from inside workspace/<project> and the agent starts in that project;
   or set SANDBOX_PROJECT=<name> from anywhere.
@@ -273,6 +284,7 @@ case "$cmd" in
     start_vm
     echo "Provisioning (installs toolchain and agents, takes a few minutes)..."
     vssh debian -T 'sudo bash -s' < "$ROOT/provision.sh"
+    touch "$VM_DIR/provisioned"   # install.sh reruns provision until this exists
     ;;
 
   start)  start_vm ;;
@@ -331,10 +343,11 @@ case "$cmd" in
     read -r ans
     [ "$ans" = y ] || { echo "aborted"; exit 1; }
     stop_vm
-    rm -f "$DISK" "$SEED" "$VM_DIR/known_hosts" "$VM_DIR/console.log"
+    rm -f "$DISK" "$SEED" "$VM_DIR/known_hosts" "$VM_DIR/console.log" "$VM_DIR/provisioned"
     ;;
 
   info)
+    echo "sandbox:   $VERSION"
     echo "qemu:      $(qemu-system-aarch64 --version 2>/dev/null | head -1 || echo 'not installed')"
     echo "vm:        $(if vm_running; then echo running; else echo stopped; fi)  disk: $DISK"
     echo "base:      $BASE_IMAGE"
@@ -345,6 +358,7 @@ case "$cmd" in
     echo "env fwd:   ${SSH_ENV[*]:-<none>}" | sed 's/-o SendEnv=//g'
     ;;
 
+  version|--version|-V) echo "agent-sandbox $VERSION" ;;
   ""|-h|--help|help) usage ;;
   *) echo "sandbox: unknown command '$cmd'" >&2; usage >&2; exit 2 ;;
 esac
