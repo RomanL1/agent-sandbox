@@ -139,6 +139,7 @@ subdirectory: `cd ~/code/myapp/src && ~/agent-sandbox/sandbox codex`.
 | Command | Effect |
 |---|---|
 | `init` | Ask for VM settings, install QEMU, fetch the image, create and provision the VM (once) |
+| `config` | Change CPUs, memory and git forwarding; offers to restart the VM |
 | `provision` | Rerun `provision.sh`, after editing it or if `init` was cut short |
 | `start` / `stop` / `status` | VM lifecycle; agent commands start it on demand |
 | `claude` / `codex` / `opencode` / `copilot` / `agy` | Run that agent with permissions bypassed, args forwarded |
@@ -183,7 +184,9 @@ echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.sandbox-env
 ## Configuration
 
 `init` saves CPUs, memory, disk size and git forwarding to `vm/config`, one
-`KEY=value` per line. Edit it to change them; `destroy` keeps it, so a rebuild
+`KEY=value` per line. Change them with `sandbox config`, which asks the same
+questions with your current values as defaults and offers to restart a running
+VM, or edit the file; `destroy` keeps it, so a rebuild
 reuses your answers. Memory and CPUs take effect on the next `start`, disk size
 only on the next `init`. Variables set in your shell override the file.
 

@@ -19,6 +19,7 @@ CONFIG="$VM_DIR/config"
 # Settings chosen at init live in vm/config as KEY=value lines. Variables set
 # in the environment win over the file.
 CONFIG_KEYS="SANDBOX_CPUS SANDBOX_MEMORY SANDBOX_DISK_SIZE SANDBOX_GIT"
+GIT_FROM_ENV="${SANDBOX_GIT+x}"
 if [ -f "$CONFIG" ]; then
   while IFS='=' read -r k v; do
     case " $CONFIG_KEYS " in *" $k "*) [ -n "${!k+x}" ] || export "$k=$v" ;; esac
@@ -119,12 +120,11 @@ done
 # Git identity, so agent-authored commits are attributed correctly.
 gn="$(git config --global user.name 2>/dev/null || true)"
 ge="$(git config --global user.email 2>/dev/null || true)"
-if [ "$GIT_FWD" != 1 ]; then gn= ge=; fi
-if [ -n "$gn" ]; then
+if [ "$GIT_FWD" = 1 ] && [ -n "$gn" ]; then
   export GIT_AUTHOR_NAME="$gn" GIT_COMMITTER_NAME="$gn"
   SSH_ENV+=(-o SendEnv=GIT_AUTHOR_NAME -o SendEnv=GIT_COMMITTER_NAME)
 fi
-if [ -n "$ge" ]; then
+if [ "$GIT_FWD" = 1 ] && [ -n "$ge" ]; then
   export GIT_AUTHOR_EMAIL="$ge" GIT_COMMITTER_EMAIL="$ge"
   SSH_ENV+=(-o SendEnv=GIT_AUTHOR_EMAIL -o SendEnv=GIT_COMMITTER_EMAIL)
 fi
@@ -261,13 +261,14 @@ ensure_image() {
   mv "$BASE_IMAGE.part" "$BASE_IMAGE"
 }
 
-# Ask for the VM's resources and git forwarding once, and save them to
-# vm/config. Without a terminal the defaults are saved.
+# Ask for the VM's resources and git forwarding, and save them to vm/config.
+# Runs at init and on `sandbox config`; current values are the defaults.
+# Without a terminal the defaults are saved.
 configure() {
   local host_cpus host_mem v
   host_cpus="$(sysctl -n hw.ncpu)"
   host_mem="$(( $(sysctl -n hw.memsize) / 1073741824 ))G"
-  have_tty && echo "VM settings (Enter keeps the default; edit $CONFIG later):"
+  have_tty && echo "VM settings (Enter keeps the current value; rerun with: sandbox config):"
   while v="$(ask "  CPUs (this Mac has $host_cpus)" "$CPUS")"; do
     [[ "$v" =~ ^[1-9][0-9]*$ ]] && [ "$v" -le "$host_cpus" ] && break
     echo "  enter a number from 1 to $host_cpus"; have_tty || die "invalid SANDBOX_CPUS: $v"
@@ -276,11 +277,15 @@ configure() {
     [[ "$v" =~ ^[1-9][0-9]*[MG]$ ]] && break
     echo "  enter a size like 4G or 4096M"; have_tty || die "invalid SANDBOX_MEMORY: $v"
   done; MEMORY="$v"
-  while v="$(ask "  Disk size limit (grows as used)" "$DISK_SIZE")"; do
-    [[ "$v" =~ ^[1-9][0-9]*[MGT]$ ]] && break
-    echo "  enter a size like 40G"; have_tty || die "invalid SANDBOX_DISK_SIZE: $v"
-  done; DISK_SIZE="$v"
-  if [ -n "$gn$ge" ] && have_tty && [ -z "${SANDBOX_GIT+x}" ]; then
+  if [ -f "$DISK" ]; then
+    have_tty && echo "  Disk size: $DISK_SIZE (fixed once the VM exists; destroy + init to change)"
+  else
+    while v="$(ask "  Disk size limit (grows as used)" "$DISK_SIZE")"; do
+      [[ "$v" =~ ^[1-9][0-9]*[MGT]$ ]] && break
+      echo "  enter a size like 40G"; have_tty || die "invalid SANDBOX_DISK_SIZE: $v"
+    done; DISK_SIZE="$v"
+  fi
+  if [ -n "$gn$ge" ] && have_tty && [ -z "$GIT_FROM_ENV" ]; then
     if confirm "  Pass your git name and email ($gn <$ge>) into the VM for commits?"; then
       GIT_FWD=1; else GIT_FWD=0; fi
   fi
@@ -309,6 +314,7 @@ usage: ./sandbox [-w|--workspace DIR] <command> [args]
   -w, --workspace DIR     share DIR at /workspace (same as SANDBOX_WORKSPACE)
 
   init                    install qemu, fetch the image, create and provision the VM
+  config                  change CPUs, memory and git forwarding (saved in vm/config)
   provision               rerun provision.sh (after editing it, or if init was cut short)
   start | stop | status   VM lifecycle; agent commands start it on demand
   claude|codex|opencode|copilot|agy [args...]
@@ -358,6 +364,15 @@ case "$cmd" in
     echo "Provisioning (installs toolchain and agents, takes a few minutes)..."
     vssh debian -T 'sudo bash -s' < "$ROOT/provision.sh"
     touch "$VM_DIR/provisioned"   # install.sh reruns provision until this exists
+    ;;
+
+  config)
+    have_tty || die "config needs a terminal; edit $CONFIG instead"
+    configure
+    if vm_running; then
+      if confirm "Restart the VM now so CPUs and memory apply?"; then stop_vm; start_vm
+      else echo "CPUs and memory apply after: sandbox stop"; fi
+    fi
     ;;
 
   start)  start_vm ;;
