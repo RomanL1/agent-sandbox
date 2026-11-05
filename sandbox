@@ -2,7 +2,7 @@
 # Agentic dev sandbox: a QEMU Linux VM on macOS, driven over ssh.
 set -euo pipefail
 
-VERSION=0.2.1
+VERSION=0.2.2
 
 # Follow symlinks (e.g. ~/.local/bin/sandbox from install.sh) to the checkout.
 src="${BASH_SOURCE[0]}"
