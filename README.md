@@ -1,26 +1,48 @@
 # agent-sandbox
 
-Rootless container sandbox for agentic development. Claude Code, Codex,
-opencode, GitHub Copilot CLI and Antigravity (`agy`) run inside a container with
-no access to your host credentials or files outside `workspace/`.
+QEMU VM sandbox for agentic development on macOS. Claude Code, Codex, opencode,
+GitHub Copilot CLI and Antigravity (`agy`) run inside a Debian VM that sees
+`workspace/` and nothing else from your Mac.
 
-Podman-first, Docker-compatible.
+## Setup
 
-## Quick start
+Needs an Apple Silicon Mac with [Homebrew](https://brew.sh). One command does
+the rest:
 
 ```sh
-./sandbox build
+./sandbox init
+```
+
+`init` runs once and takes several minutes. It:
+
+1. installs QEMU with Homebrew if `qemu-system-aarch64` is missing;
+2. downloads the Debian 13 arm64 cloud image (~430 MB) to `vm/` and checks it
+   against Debian's `SHA512SUMS`;
+3. creates the VM disk as a copy-on-write overlay of that image, plus an ssh
+   key and a cloud-init seed, all in `vm/`;
+4. boots the VM and waits for ssh;
+5. runs [`provision.sh`](provision.sh) as root: packages, Node, firewall, shell
+   wrappers, then the agent CLIs as `dev`.
+
+Then:
+
+```sh
 ./sandbox claude          # or: codex / opencode / copilot / agy
 ```
 
-Each agent logs in inside the sandbox on first run; logins persist in a named
-volume, so `--rm` containers stay stateless without forcing you to re-auth.
+Log each agent in on its first run, or copy host logins with `import-creds`.
 
-Agents launch with their permission prompts **bypassed** — the container is the
+To start over, `./sandbox destroy && ./sandbox init`. The downloaded image is
+kept, so a rebuild skips step 2; delete `vm/` to remove everything.
+
+The VM starts on demand and keeps running until `./sandbox stop`. Each agent
+logs in inside the VM on first run; logins live on the VM disk.
+
+Agents launch with their permission prompts **bypassed** — the VM is the
 security boundary, so approving each edit and command inside it buys nothing.
 The same wrappers apply to agents started from `./sandbox shell`. Set
 `SANDBOX_NO_BYPASS=1` to restore the prompts, or call `command claude ...`
-inside the sandbox to reach the unwrapped binary.
+inside the VM to reach the unwrapped binary.
 
 | Agent | Flag applied |
 |---|---|
@@ -32,8 +54,6 @@ inside the sandbox to reach the unwrapped binary.
 
 A flag you pass yourself is not duplicated (codex rejects the repeat).
 
-Put code in `workspace/` — it is bind-mounted read-write at `/workspace`.
-
 ## Running an agent inside one project
 
 Agents start in `/workspace` by default. To start in a project instead:
@@ -43,38 +63,31 @@ cd workspace/myapp && ../../sandbox claude   # cwd inside workspace/ is detected
 SANDBOX_PROJECT=myapp ./sandbox claude       # or name it from anywhere
 ```
 
-Both put the agent in `/workspace/myapp`. Nested directories work too, so
-running from `workspace/myapp/src` starts the agent there.
-
 The agent can still *see* sibling projects, since the whole `workspace/` is
-mounted. To hand it one project and nothing else, mount only that project — it
-lands at `/workspace` and neighbours do not exist inside the container:
+shared. To hand it one project only, share that directory instead. The share
+is fixed when the VM boots, so stop it first:
 
 ```sh
+./sandbox stop
 SANDBOX_WORKSPACE=~/code/myapp ./sandbox claude
-```
-
-That form also works for a project living outside `workspace/`. Pair it with a
-per-project home volume to keep sessions and logins separate:
-
-```sh
-SANDBOX_WORKSPACE=~/code/myapp SANDBOX_HOME_VOLUME=myapp-home ./sandbox claude
 ```
 
 ## Commands
 
 | Command | Effect |
 |---|---|
-| `build [args...]` | Build the image; extra args pass through to the engine |
+| `init` | Install QEMU, fetch the image, create and provision the VM (once) |
+| `provision` | Rerun `provision.sh`, after editing it or if `init` was cut short |
+| `start` / `stop` / `status` | VM lifecycle; agent commands start it on demand |
 | `claude` / `codex` / `opencode` / `copilot` / `agy` | Run that agent with permissions bypassed, args forwarded |
-| `shell` | Interactive root shell with a writable container filesystem |
-| `run <cmd...>` | One command in an ephemeral container |
-| `up` / `exec <cmd...>` / `down` / `ps` | Long-lived container lifecycle |
-| `import-creds [name...]` | Copy host agent logins into the sandbox volume |
-| `reset-home` | Delete the volume, dropping all sandbox logins |
-| `info` | Engine, rootless status, resolved settings |
+| `shell` | Login shell as the agent user `dev` |
+| `root` | Root shell in the VM |
+| `run <cmd...>` | One command as `dev` |
+| `import-creds [name...]` | Copy host agent logins into the VM |
+| `destroy` | Delete the VM disk, dropping all VM state and logins |
+| `info` | Resolved settings |
 
-## What is in the image
+## What is in the VM
 
 | | |
 |---|---|
@@ -82,18 +95,16 @@ SANDBOX_WORKSPACE=~/code/myapp SANDBOX_HOME_VOLUME=myapp-home ./sandbox claude
 | Toolchain | Node 26, Python 3.13, build-essential |
 | Dev tools | `git`, `gh`, `ripgrep`, `fd`, `jq`, `curl`, `vim` |
 
-Agents come from their official installers, which target `$HOME/.local/bin`.
-Since `/home/dev` is a runtime volume that would mask a build-time install, the
-image installs them under `/opt/agents` and links them onto `PATH`. At runtime
-`HOME` is `/home/dev` again, so each agent writes its config to the volume.
+`provision.sh` installs all of it. Agents come from their official installers
+into `dev`'s home and update themselves. To change the toolchain, edit
+`provision.sh`, then `./sandbox destroy && ./sandbox init`.
 
-Claude Code relocates itself to `~/.local/share/claude` on first run and
-self-updates from there, so its version tracks the volume rather than the image
-once the volume exists; `./sandbox reset-home` returns it to the image version.
+The VM is one long-lived system: whatever an agent installs stays for the next
+run and for every other agent. `destroy` + `init` is the reset.
 
-### Adding tools without a rebuild
+### Adding tools
 
-Anything installed under `/home/dev` persists on the home volume. Every command
+`dev` has no `sudo`. User-level installs persist in its home, and every command
 starts through a login shell that sources `~/.sandbox-env`, so a tool only needs
 to put itself on `PATH` there:
 
@@ -103,73 +114,65 @@ curl -fsSL https://bun.sh/install | bash
 echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.sandbox-env
 ```
 
-The next `./sandbox codex` sees `bun`. System packages (`apt`, root `npm -g`)
-land in the ephemeral container layer and still belong in the `Containerfile`.
+`npm install -g` works as `dev` (prefix `~/.npm-global`). System packages need
+`./sandbox root` and `apt`; add them to `provision.sh` to keep them on rebuild.
 
 ## Configuration
 
 | Variable | Default | Notes |
 |---|---|---|
-| `SANDBOX_ENGINE` | autodetect | `podman` preferred, else `docker` |
-| `SANDBOX_IMAGE` | `agent-sandbox:dev` | |
-| `SANDBOX_NAME` | `agent-sandbox` | Long-lived container name |
-| `SANDBOX_WORKSPACE` | `./workspace` | Host dir mounted at `/workspace` |
+| `SANDBOX_WORKSPACE` | `./workspace` | Host dir shared at `/workspace`; fixed at boot |
 | `SANDBOX_PROJECT` | autodetect | Subdirectory of the workspace to start in |
-| `SANDBOX_HOME_VOLUME` | `agent-sandbox-home` | Persistent `/home/dev` |
-| `SANDBOX_NET` | `bridge` | `none` blocks all network |
-| `SANDBOX_PORTS` | none | e.g. `"8080:8080 5173:5173"` |
-| `SANDBOX_MEMORY` | `8g` | |
+| `SANDBOX_NET` | `user` | `none` blocks all egress (ssh still works) |
+| `SANDBOX_PORTS` | none | e.g. `"8080:8080 5173:5173"`, on `127.0.0.1`; fixed at boot |
+| `SANDBOX_MEMORY` | `4G` | VM RAM; fixed at boot |
+| `SANDBOX_CPUS` | `4` | |
+| `SANDBOX_DISK_SIZE` | `40G` | Set before `init` |
+| `SANDBOX_SSH_PORT` | `2222` | Host port for the VM's ssh |
+| `SANDBOX_VM_DIR` | `./vm` | Disk, seed, key, logs |
+| `SANDBOX_BASE_IMAGE` | `./vm/debian-13-arm64.qcow2` | |
 | `SANDBOX_HOST_HOME` | `$HOME` | Source home for `import-creds` |
 | `SANDBOX_NO_BYPASS` | unset | Set to `1` to keep agent permission prompts |
 
 API keys present in the calling shell are forwarded (`ANTHROPIC_API_KEY`,
-`OPENAI_API_KEY`, `GITHUB_TOKEN`, `GEMINI_API_KEY`, proxy vars, …) but never
-baked into the image. Your global git `user.name` and `user.email` are passed
-through so agent-authored commits are attributed correctly.
+`OPENAI_API_KEY`, `GITHUB_TOKEN`, `GEMINI_API_KEY`, proxy vars, …) as ssh
+environment, so they never show up on a command line. Your global git
+`user.name` and `user.email` are passed through so agent-authored commits are
+attributed correctly.
 
 ## Isolation
 
-Agent and `run` containers run unprivileged: `--cap-drop=ALL`, `--security-opt
-no-new-privileges`, a read-only root filesystem, a 2048 pid limit and a memory
-cap. Writable paths are `/workspace`, the `/home/dev` volume and a tmpfs `/tmp`.
-`./sandbox shell` is the deliberate exception: it starts as root with a writable
-container filesystem so packages can be installed for that ephemeral session.
+Agents run as `dev`, an unprivileged user with no `sudo`, inside a VM with its
+own kernel. From your Mac the VM sees only `workspace/` (over 9p) and the ports
+you forward, bound to `127.0.0.1`. A firewall in the VM blocks your Mac's
+`localhost` (QEMU's `10.0.2.2`) and private LAN ranges; the public internet
+stays reachable.
 
-Nothing from your host home is mounted, so an agent running with
-`--dangerously-skip-permissions` (or Codex/opencode equivalents) cannot reach
-`~/.ssh`, cloud credentials, or repositories outside `workspace/`.
+`dev`'s uid matches yours, so it can write the workspace and files it creates
+there are owned by you.
 
-Because the agents run with their own permission checks disabled, the container
-boundary is doing all of the work. Things this does **not** protect against:
+Things this does **not** protect against:
 
-- **Network egress is unrestricted** by default; agents can reach any host.
-  Use `SANDBOX_NET=none` for untrusted code, or attach a filtered network.
+- **Network egress is unrestricted** to the internet; agents can reach any
+  public host. `SANDBOX_NET=none` cuts everything, model APIs included.
 - **Everything in `workspace/` is writable** by an agent with no confirmation
-  step, including `git push` if a token is forwarded. Mount only what the agent
-  should be allowed to change.
-- **`import-creds` copies real logins into the sandbox.** After running it, code
-  executing in the container can use those credentials to act as you. Prefer
-  logging in inside the sandbox with accounts scoped to what it should reach.
+  step, including `git push` if a token is forwarded.
+- **Files in `workspace/` can run code on your Mac.** An agent can write
+  `.git/hooks`, `.git/config` (`core.fsmonitor`), `.envrc`, editor task files
+  or `package.json` scripts; running git, direnv, your editor or npm on the Mac
+  then executes them outside the VM. Review those before using host tools on
+  agent-touched repos, or work from a clone.
+- **`import-creds` copies real logins into the VM.** Code running there can
+  use them to act as you. Logins macOS keeps in the Keychain (Claude Code, `gh`)
+  do not come along; log in inside the VM instead.
 
-The kernel boundary is a container, not a VM. On macOS there is an extra VM
-layer; on Linux there is not.
+## Memory
 
-## macOS notes
+A freshly booted VM holds about 350 MB. Linux then fills spare guest RAM with
+file cache, and QEMU on macOS never hands touched pages back, so the VM grows
+towards `SANDBOX_MEMORY` and stays there until it stops. Dropping the guest
+cache or a free-page-reporting balloon does not shrink it. Activity Monitor
+shows roughly double the real figure (`footprint -p <pid>` gives the real one).
 
-Podman runs containers in a Linux VM. Rootless is a property of that VM:
-
-```sh
-podman machine inspect podman-machine-default --format '{{.Rootful}}'   # want: false
-podman info --format '{{.Host.Security.Rootless}}'                      # want: true
-```
-
-Switch a rootful machine:
-
-```sh
-podman machine stop && podman machine set --rootful=false && podman machine start
-```
-
-Rootless containers cannot bind host ports below 1024 — use `8080`, not `80`.
-
-The macOS Podman package installs the CLI at `/opt/podman/bin`, which is not on
-the default `PATH`; `sandbox` adds it automatically.
+So: size `SANDBOX_MEMORY` to what agents need (4G fits a couple at once) and
+`./sandbox stop` when idle, which frees all of it.
