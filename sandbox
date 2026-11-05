@@ -108,7 +108,8 @@ remote_cmd() {
 }
 
 # Interactive when we have a terminal, plain pipes otherwise (scripts, CI).
-tty_flag() { if [ -t 0 ] && [ -t 1 ]; then echo -t; else echo -T; fi; }
+# Decided here, not in a $(...) helper, where stdout is always a pipe.
+if [ -t 0 ] && [ -t 1 ]; then TTY_FLAG=-t; else TTY_FLAG=-T; fi
 
 # session <ssh args...>: run an ssh session, then put the terminal back. A TUI
 # that dies with the connection (VM stopped, ssh dropped, crash) never undoes
@@ -280,7 +281,7 @@ case "$cmd" in
 
   claude|codex|opencode|copilot|agy)
     start_vm
-    session ${SSH_ENV[@]+"${SSH_ENV[@]}"} "$(tty_flag)" dev@127.0.0.1 \
+    session ${SSH_ENV[@]+"${SSH_ENV[@]}"} "$TTY_FLAG" dev@127.0.0.1 \
       "$(remote_cmd "$cmd" "$@")"
     ;;
 
@@ -298,7 +299,7 @@ case "$cmd" in
   run)
     [ $# -gt 0 ] || die "run needs a command"
     start_vm
-    session ${SSH_ENV[@]+"${SSH_ENV[@]}"} "$(tty_flag)" dev@127.0.0.1 \
+    session ${SSH_ENV[@]+"${SSH_ENV[@]}"} "$TTY_FLAG" dev@127.0.0.1 \
       "$(remote_cmd "$@")"
     ;;
 
