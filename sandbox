@@ -323,6 +323,9 @@ usage: ./sandbox [-w|--workspace DIR] <command> [args]
   shell                   login shell as the agent user
   root                    root shell in the VM
   run <cmd...>            run one command as the agent user
+  forward PORT[:VMPORT]...
+                          tunnel 127.0.0.1:PORT on the Mac to a VM port over ssh
+                          (no restart needed; Ctrl-C stops it)
   import-creds [name...]  copy host agent logins into the VM
   destroy                 delete the VM disk (drops all VM state and logins)
   info                    resolved settings
@@ -340,7 +343,7 @@ USAGE
 
 cmd="${1:-}"; shift || true
 case "$cmd" in
-  claude|codex|opencode|copilot|agy|shell|root|run|start|import-creds) ensure_ready ;;
+  claude|codex|opencode|copilot|agy|shell|root|run|start|forward|import-creds) ensure_ready ;;
 esac
 case "$cmd" in
   init)
@@ -401,6 +404,22 @@ case "$cmd" in
     start_vm
     session ${SSH_ENV[@]+"${SSH_ENV[@]}"} "$TTY_FLAG" dev@127.0.0.1 \
       "$(remote_cmd "$@")"
+    ;;
+
+  forward)
+    # ssh -L tunnels: no VM restart (unlike SANDBOX_PORTS), and they reach
+    # services bound to the VM's 127.0.0.1. Local forwards only; nothing in
+    # the VM gains a path back to the Mac.
+    [ $# -gt 0 ] || die "forward needs a port, e.g.: sandbox forward 3000 8080:80"
+    fwd=()
+    for p in "$@"; do
+      [[ "$p" =~ ^[0-9]+(:[0-9]+)?$ ]] || die "bad port '$p'; use PORT or HOSTPORT:VMPORT"
+      fwd+=(-L "127.0.0.1:${p%%:*}:127.0.0.1:${p##*:}")
+      echo "http://127.0.0.1:${p%%:*} -> VM port ${p##*:}"
+    done
+    start_vm
+    echo "Forwarding; Ctrl-C to stop."
+    vssh dev -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 "${fwd[@]}"
     ;;
 
   import-creds)

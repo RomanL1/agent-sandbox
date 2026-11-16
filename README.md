@@ -146,6 +146,7 @@ subdirectory: `cd ~/code/myapp/src && ~/agent-sandbox/sandbox codex`.
 | `shell` | Login shell as the agent user `dev` |
 | `root` | Root shell in the VM |
 | `run <cmd...>` | One command as `dev` |
+| `forward PORT[:VMPORT]...` | Tunnel `127.0.0.1:PORT` on the Mac to a port in the VM over ssh; Ctrl-C stops it |
 | `import-creds [name...]` | Copy host agent logins into the VM |
 | `destroy` | Delete the VM disk, dropping all VM state and logins |
 | `info` | Resolved settings |
